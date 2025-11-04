@@ -492,6 +492,192 @@ class ComputeChain {
     }
 
     /**
+     * Get provider reputation and trust metrics
+     * @param {string} providerAddress - Provider account address
+     * @returns {Promise<Object>} Reputation data
+     */
+    async getProviderReputation(providerAddress) {
+        await this.connect();
+
+        const provider = await this.api.query.ipfsHost.providers(providerAddress);
+
+        if (provider.isNone) {
+            throw new Error(`Provider not found: ${providerAddress}`);
+        }
+
+        const p = provider.unwrap();
+
+        return {
+            address: providerAddress,
+            reputationScore: p.reputationScore.toNumber(),
+            slashedAmount: p.slashedAmount.toString(),
+            challengeCount: p.challengeCount.toNumber(),
+            fraudCount: p.fraudCount.toNumber(),
+            completedJobs: p.completedJobs.toNumber(),
+            activeJobs: p.activeJobs.toNumber(),
+            stake: p.stake.toString()
+        };
+    }
+
+    /**
+     * Challenge a job's execution
+     * @param {number} jobId - Job ID to challenge
+     * @param {number} checkpointIndex - Checkpoint index to challenge
+     * @param {string} account - Challenger account (default: //Alice)
+     * @returns {Promise<number>} Challenge ID
+     */
+    async challengeJob(jobId, checkpointIndex, account = '//Alice') {
+        await this.connect();
+
+        const signer = this.keyring.addFromUri(account);
+
+        console.log(`⚠️  Challenging job ${jobId} checkpoint ${checkpointIndex}...`);
+
+        return new Promise((resolve, reject) => {
+            this.api.tx.ipfsHost.challengeExecution(jobId, checkpointIndex)
+                .signAndSend(signer, ({ status, events, dispatchError }) => {
+                    if (dispatchError) {
+                        if (dispatchError.isModule) {
+                            const decoded = this.api.registry.findMetaError(dispatchError.asModule);
+                            reject(new Error(`${decoded.name}: ${decoded.docs.join(' ')}`));
+                        } else {
+                            reject(new Error(dispatchError.toString()));
+                        }
+                        return;
+                    }
+
+                    if (status.isInBlock) {
+                        events.forEach(({ event }) => {
+                            if (event.section === 'ipfsHost' && event.method === 'ChallengeCreated') {
+                                const challengeId = event.data[0].toNumber();
+                                console.log(`✅ Challenge created: ${challengeId}`);
+                                resolve(challengeId);
+                            }
+                        });
+                    }
+                });
+        });
+    }
+
+    /**
+     * Get challenge details
+     * @param {number} challengeId - Challenge ID
+     * @returns {Promise<Object>} Challenge data
+     */
+    async getChallenge(challengeId) {
+        await this.connect();
+
+        const challenge = await this.api.query.ipfsHost.challenges(challengeId);
+
+        if (challenge.isNone) {
+            return null;
+        }
+
+        const c = challenge.unwrap();
+
+        return {
+            challengeId,
+            jobId: c.jobId.toNumber(),
+            challenger: c.challenger.toString(),
+            provider: c.provider.toString(),
+            checkpointIndex: c.checkpointIndex.toNumber(),
+            status: c.status.toString(),
+            createdAt: c.createdAt.toNumber(),
+            resolvedAt: c.resolvedAt.isSome ? c.resolvedAt.unwrap().toNumber() : null,
+            outcome: c.outcome.isSome ? c.outcome.unwrap().toString() : null
+        };
+    }
+
+    /**
+     * Check if job is in challenge period
+     * @param {number} jobId - Job ID
+     * @returns {Promise<Object>} Challenge period status
+     */
+    async getChallengePeriodStatus(jobId) {
+        await this.connect();
+
+        const job = await this.getJob(jobId);
+        if (!job) {
+            throw new Error(`Job not found: ${jobId}`);
+        }
+
+        const deadline = await this.api.query.ipfsHost.challengePeriodDeadlines(jobId);
+
+        if (deadline.isNone) {
+            return {
+                inChallengePeriod: false,
+                canChallenge: false,
+                status: job.status
+            };
+        }
+
+        const currentBlock = await this.api.query.system.number();
+        const deadlineBlock = deadline.unwrap().toNumber();
+        const current = currentBlock.toNumber();
+
+        return {
+            inChallengePeriod: current < deadlineBlock,
+            canChallenge: current < deadlineBlock,
+            currentBlock: current,
+            deadlineBlock,
+            blocksRemaining: Math.max(0, deadlineBlock - current),
+            status: job.status
+        };
+    }
+
+    /**
+     * List all providers with reputation scores
+     * @returns {Promise<Array>} Array of providers with reputation
+     */
+    async listProviders() {
+        await this.connect();
+
+        const entries = await this.api.query.ipfsHost.providers.entries();
+
+        return entries.map(([key, value]) => {
+            const address = key.args[0].toString();
+            const p = value.unwrap();
+
+            return {
+                address,
+                reputationScore: p.reputationScore.toNumber(),
+                completedJobs: p.completedJobs.toNumber(),
+                fraudCount: p.fraudCount.toNumber(),
+                slashedAmount: p.slashedAmount.toString(),
+                stake: p.stake.toString()
+            };
+        }).sort((a, b) => b.reputationScore - a.reputationScore); // Sort by reputation
+    }
+
+    /**
+     * Get all challenges for a job
+     * @param {number} jobId - Job ID
+     * @returns {Promise<Array>} Array of challenges
+     */
+    async getJobChallenges(jobId) {
+        await this.connect();
+
+        const entries = await this.api.query.ipfsHost.challenges.entries();
+
+        const challenges = [];
+        for (const [key, value] of entries) {
+            const c = value.unwrap();
+            if (c.jobId.toNumber() === jobId) {
+                challenges.push({
+                    challengeId: key.args[0].toNumber(),
+                    challenger: c.challenger.toString(),
+                    provider: c.provider.toString(),
+                    checkpointIndex: c.checkpointIndex.toNumber(),
+                    status: c.status.toString(),
+                    outcome: c.outcome.isSome ? c.outcome.unwrap().toString() : null
+                });
+            }
+        }
+
+        return challenges;
+    }
+
+    /**
      * Disconnect
      */
     async disconnect() {
