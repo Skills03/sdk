@@ -1,5 +1,5 @@
 {
-  "name": "@compute-chain/sdk",
+  "name": "compute-chain-sdk",
   "version": "1.0.0",
   "description": "Build decentralized GPU marketplaces in 3 commands",
   "main": "compute-chain.js",
@@ -32,6 +32,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/compute-chain"
+    "url": "https://github.com/Skills03/sdk"
   }
 }
