@@ -1,0 +1,52 @@
+{
+  "name": "ai-training-testnet",
+  "id": "ai_training_testnet",
+  "chainType": "Development",
+  "bootNodes": [],
+  "telemetryEndpoints": null,
+  "protocolId": null,
+  "properties": {
+    "tokenDecimals": 12,
+    "tokenSymbol": "COMPUTE"
+  },
+  "codeSubstitutes": {},
+  "genesis": {
+    "runtimeGenesis": {
+      "code": "0x",
+      "patch": {
+        "balances": {
+          "balances": [
+            [
+              "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+              "1000000000000000000"
+            ],
+            [
+              "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "1000000000000000000"
+            ]
+          ]
+        },
+        "sudo": {
+          "key": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+        },
+        "ipfsHost": {
+          "chainConfigStorage": [
+            {
+              "ramCostPerGbHour": 5,
+              "cpuCostPerCoreHour": 3,
+              "gpuCostPerGpuHour": 30,
+              "maxMemoryGb": 256,
+              "maxCpuCores": 32,
+              "maxGpuCount": 8,
+              "maxDurationMinutes": 10080,
+              "maxDiskGb": 500,
+              "challengePeriodBlocks": 200,
+              "slashPercentage": 30,
+              "minProviderStake": 5000
+            }
+          ]
+        }
+      }
+    }
+  }
+}

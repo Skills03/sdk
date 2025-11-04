@@ -1,0 +1,52 @@
+{
+  "name": "render-farm-chain",
+  "id": "render_farm_chain",
+  "chainType": "Development",
+  "bootNodes": [],
+  "telemetryEndpoints": null,
+  "protocolId": null,
+  "properties": {
+    "tokenDecimals": 12,
+    "tokenSymbol": "COMPUTE"
+  },
+  "codeSubstitutes": {},
+  "genesis": {
+    "runtimeGenesis": {
+      "code": "0x",
+      "patch": {
+        "balances": {
+          "balances": [
+            [
+              "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+              "1000000000000000000"
+            ],
+            [
+              "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+              "1000000000000000000"
+            ]
+          ]
+        },
+        "sudo": {
+          "key": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+        },
+        "ipfsHost": {
+          "chainConfigStorage": [
+            {
+              "ramCostPerGbHour": 8,
+              "cpuCostPerCoreHour": 10,
+              "gpuCostPerGpuHour": 80,
+              "maxMemoryGb": 128,
+              "maxCpuCores": 32,
+              "maxGpuCount": 4,
+              "maxDurationMinutes": 480,
+              "maxDiskGb": 200,
+              "challengePeriodBlocks": 50,
+              "slashPercentage": 70,
+              "minProviderStake": 3000
+            }
+          ]
+        }
+      }
+    }
+  }
+}

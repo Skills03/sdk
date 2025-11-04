@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  blockchain:
+    build:
+      context: /home/ubuntu/substrate-ipfs-host/substrate-ipfs-host
+      dockerfile: Dockerfile
+    command: |
+      --dev
+      --rpc-external
+      --rpc-cors=all
+      --chain=/data/chain-spec.json
+    volumes:
+      - ./chain-spec.json:/data/chain-spec.json:ro
+      - chain-data:/data
+    ports:
+      - "9944:9944"  # WebSocket RPC
+      - "9933:9933"  # HTTP RPC
+      - "30333:30333" # P2P
+    restart: unless-stopped
+
+  docker-service:
+    build:
+      context: /home/ubuntu/substrate-ipfs-host/substrate-ipfs-host/docker-service
+    environment:
+      - PORT=7682
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "7682:7682"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  provider-service:
+    build:
+      context: /home/ubuntu/substrate-ipfs-host/substrate-ipfs-host/provider-service-gpu
+    environment:
+      - SUBSTRATE_WS=ws://blockchain:9944
+      - DOCKER_SERVICE=http://docker-service:7682
+      - PROVIDER_SEED=//Alice
+    depends_on:
+      - blockchain
+      - docker-service
+    restart: unless-stopped
+
+volumes:
+  chain-data:
