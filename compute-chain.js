@@ -187,6 +187,162 @@ class ComputeChain {
     }
 
     /**
+     * Upload input file to storage service
+     *
+     * @param {string|Buffer} file - File path or Buffer
+     * @param {string} storageUrl - Storage service URL (default: http://localhost:7683)
+     * @returns {Promise<{cid: string, size: number, checksum: string}>}
+     */
+    async uploadInput(file, storageUrl = 'http://localhost:7683') {
+        const FormData = require('form-data');
+        const axios = require('axios');
+        const fs = require('fs');
+
+        const form = new FormData();
+
+        if (typeof file === 'string') {
+            form.append('file', fs.createReadStream(file));
+        } else if (Buffer.isBuffer(file)) {
+            form.append('file', file);
+        } else {
+            throw new Error('File must be path string or Buffer');
+        }
+
+        const response = await axios.post(`${storageUrl}/upload`, form, {
+            headers: form.getHeaders()
+        });
+
+        console.log(`📤 Uploaded: CID=${response.data.cid}, size=${response.data.size}`);
+        return response.data;
+    }
+
+    /**
+     * Submit job with input files
+     *
+     * @param {Object} options
+     * @param {string} options.image - Docker image
+     * @param {string} options.command - Command to run
+     * @param {Array} options.inputs - Input files [{cid, path, size, checksum}]
+     * @param {number} options.ram - RAM in GB (default: 2)
+     * @param {number} options.cpu - CPU cores (default: 1)
+     * @param {number} options.disk - Disk in GB (default: 10)
+     * @param {number} options.duration - Minutes (default: 60)
+     * @param {number} options.gpus - GPU count (default: 0)
+     * @param {string} options.account - Seed phrase (default: //Alice)
+     * @param {string} options.parameters - JSON parameters (optional)
+     * @returns {Promise<number>} Job ID
+     */
+    async submitJobWithInputs(options) {
+        await this.connect();
+
+        const {
+            image,
+            command = 'echo "Hello from compute chain"',
+            inputs = [],
+            ram = 2,
+            cpu = 1,
+            disk = 10,
+            duration = 60,
+            gpus = 0,
+            account = '//Alice',
+            parameters = '{}'
+        } = options;
+
+        if (!image) throw new Error('Image required');
+        if (!inputs || inputs.length === 0) throw new Error('Inputs required (use submitJob for jobs without inputs)');
+        if (inputs.length > 10) throw new Error('Maximum 10 input files');
+
+        const signer = this.keyring.addFromUri(account);
+
+        // Calculate cost
+        const hours = Math.ceil(duration / 60);
+        const cost = (ram * 10 + cpu * 5 + gpus * 50) * hours;
+        console.log(`💰 Estimated cost: ${cost} tokens`);
+
+        console.log(`📤 Submitting job with ${inputs.length} input(s)...`);
+        console.log(`   Image: ${image}`);
+        console.log(`   Resources: ${ram}GB RAM, ${cpu} CPU, ${gpus} GPU`);
+
+        // Format inputs for blockchain
+        const inputsForChain = inputs.map(inp => {
+            const checksumBytes = typeof inp.checksum === 'string'
+                ? Buffer.from(inp.checksum, 'hex')
+                : Buffer.from(inp.checksum);
+            return [inp.cid, inp.path, inp.size, Array.from(checksumBytes)];
+        });
+
+        return new Promise((resolve, reject) => {
+            this.api.tx.ipfsHost.submitJobWithInputs(
+                image,
+                command,
+                ram,
+                cpu,
+                disk,
+                duration,
+                gpus,
+                inputsForChain,
+                parameters,
+                [] // secrets (empty for now)
+            ).signAndSend(signer, ({ status, events }) => {
+                if (status.isInBlock) {
+                    events.forEach(({ event }) => {
+                        if (event.section === 'ipfsHost' && event.method === 'JobSubmitted') {
+                            const jobId = event.data[0].toNumber();
+                            console.log(`✅ Job submitted: ${jobId}`);
+                            resolve(jobId);
+                        }
+                    });
+                }
+            }).catch(reject);
+        });
+    }
+
+    /**
+     * Get job outputs (CIDs of result files)
+     *
+     * @param {number} jobId - Job ID
+     * @returns {Promise<Array>} Output files [{cid, path, size, checksum, type}]
+     */
+    async getJobOutputs(jobId) {
+        await this.connect();
+        const job = await this.api.query.ipfsHost.jobs(jobId);
+
+        if (job.isNone) return null;
+
+        const data = job.unwrap();
+
+        if (!data.outputs || data.outputs.length === 0) {
+            return [];
+        }
+
+        return data.outputs.map(output => ({
+            cid: Buffer.from(output.cid).toString(),
+            path: Buffer.from(output.path).toString(),
+            size: output.size.toNumber(),
+            checksum: Buffer.from(output.checksum).toString('hex'),
+            type: output.outputType.toString()
+        }));
+    }
+
+    /**
+     * Download output file from storage service
+     *
+     * @param {string} cid - Content ID
+     * @param {string} storageUrl - Storage service URL (default: http://localhost:7683)
+     * @returns {Promise<Buffer>} File data
+     */
+    async downloadOutput(cid, storageUrl = 'http://localhost:7683') {
+        const axios = require('axios');
+
+        console.log(`📥 Downloading output: ${cid}`);
+        const response = await axios.get(`${storageUrl}/download/${cid}`, {
+            responseType: 'arraybuffer'
+        });
+
+        return Buffer.from(response.data);
+    }
+
+    /**
      * Disconnect
      */
     async disconnect() {
