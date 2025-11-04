@@ -13,10 +13,14 @@
 const { ApiPromise, WsProvider, Keyring } = require('@polkadot/api');
 
 class ComputeChain {
-    constructor(wsEndpoint = 'ws://localhost:9944') {
+    constructor(wsEndpoint = 'ws://localhost:9944', options = {}) {
         this.wsEndpoint = wsEndpoint;
         this.api = null;
         this.keyring = new Keyring({ type: 'sr25519' });
+
+        // Vault service configuration for secrets
+        this.vaultUrl = options.vaultUrl || 'http://localhost:8300';
+        this.vaultToken = options.vaultToken || 'dev-token';
     }
 
     /**
@@ -240,6 +244,7 @@ class ComputeChain {
             image,
             command = 'echo "Hello from compute chain"',
             inputs = [],
+            secrets = [],
             ram = 2,
             cpu = 1,
             disk = 10,
@@ -252,6 +257,7 @@ class ComputeChain {
         if (!image) throw new Error('Image required');
         if (!inputs || inputs.length === 0) throw new Error('Inputs required (use submitJob for jobs without inputs)');
         if (inputs.length > 10) throw new Error('Maximum 10 input files');
+        if (secrets.length > 10) throw new Error('Maximum 10 secrets');
 
         const signer = this.keyring.addFromUri(account);
 
@@ -272,6 +278,28 @@ class ComputeChain {
             return [inp.cid, inp.path, inp.size, Array.from(checksumBytes)];
         });
 
+        // Format secrets for blockchain
+        const secretsForChain = secrets.map(sec => {
+            // Accept object format {key: 'API_KEY', path: 'openai/key'}
+            const key = sec.key || sec.name;
+            let vaultPath = sec.path || sec.vaultPath;
+
+            // Auto-add vault:// prefix if not present
+            if (vaultPath && !vaultPath.startsWith('vault://')) {
+                vaultPath = `vault://${vaultPath}`;
+            }
+
+            if (!key || !vaultPath) {
+                throw new Error('Secret must have both key and path');
+            }
+
+            return [key, vaultPath];
+        });
+
+        if (secrets.length > 0) {
+            console.log(`🔐 Job will use ${secrets.length} secret(s)`);
+        }
+
         return new Promise((resolve, reject) => {
             this.api.tx.ipfsHost.submitJobWithInputs(
                 image,
@@ -283,7 +311,7 @@ class ComputeChain {
                 gpus,
                 inputsForChain,
                 parameters,
-                [] // secrets (empty for now)
+                secretsForChain
             ).signAndSend(signer, ({ status, events }) => {
                 if (status.isInBlock) {
                     events.forEach(({ event }) => {
@@ -341,6 +369,126 @@ class ComputeChain {
         });
 
         return Buffer.from(response.data);
+    }
+
+    /**
+     * Store a secret in vault
+     * @param {string} path - Secret path (e.g., "openai/api-key")
+     * @param {string} value - Secret value
+     * @param {Object} metadata - Access control metadata
+     * @returns {Promise<Object>} Response from vault
+     */
+    async storeSecret(path, value, metadata = {}) {
+        const axios = require('axios');
+
+        console.log(`🔐 Storing secret: ${path}`);
+
+        try {
+            const response = await axios.post(
+                `${this.vaultUrl}/v1/secrets/${path}`,
+                {
+                    value,
+                    metadata: {
+                        allowed_providers: metadata.allowed_providers || ['*'],
+                        allowed_jobs: metadata.allowed_jobs || ['*'],
+                        ...metadata
+                    }
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.vaultToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            console.log(`✅ Secret stored: ${response.data.path}`);
+            return response.data;
+        } catch (error) {
+            console.error(`❌ Failed to store secret: ${error.message}`);
+            if (error.response) {
+                console.error(`   Response: ${JSON.stringify(error.response.data)}`);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Retrieve a secret from vault
+     * @param {string} path - Secret path
+     * @returns {Promise<string>} Secret value
+     */
+    async getSecret(path) {
+        const axios = require('axios');
+
+        try {
+            const response = await axios.get(
+                `${this.vaultUrl}/v1/secrets/${path}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.vaultToken}`
+                    }
+                }
+            );
+
+            return response.data.value;
+        } catch (error) {
+            if (error.response && error.response.status === 404) {
+                throw new Error(`Secret not found: ${path}`);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Delete a secret from vault
+     * @param {string} path - Secret path
+     */
+    async deleteSecret(path) {
+        const axios = require('axios');
+
+        console.log(`🗑️  Deleting secret: ${path}`);
+
+        try {
+            const response = await axios.delete(
+                `${this.vaultUrl}/v1/secrets/${path}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.vaultToken}`
+                    }
+                }
+            );
+
+            console.log(`✅ Secret deleted: ${path}`);
+            return response.data;
+        } catch (error) {
+            console.error(`❌ Failed to delete secret: ${error.message}`);
+            throw error;
+        }
+    }
+
+    /**
+     * List all secrets in vault
+     * @returns {Promise<Array>} Array of secret paths
+     */
+    async listSecrets() {
+        const axios = require('axios');
+
+        try {
+            const response = await axios.get(
+                `${this.vaultUrl}/v1/secrets`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${this.vaultToken}`
+                    }
+                }
+            );
+
+            return response.data.secrets;
+        } catch (error) {
+            console.error(`❌ Failed to list secrets: ${error.message}`);
+            throw error;
+        }
     }
 
     /**
