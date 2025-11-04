@@ -60,10 +60,33 @@ class ComputeChain {
             disk = 10,
             duration = 60,
             gpus = 0,
-            account = '//Alice'
+            account = '//Alice',
+            skipReputationCheck = false
         } = options;
 
         if (!image) throw new Error('Image required');
+
+        // Check image reputation for security assessment
+        if (!skipReputationCheck) {
+            try {
+                const reputation = await this.getImageReputation(image);
+                console.log(`\n🔒 Security Profile: ${reputation.securityProfile}`);
+                console.log(`   Image Score: ${reputation.score}/100`);
+
+                if (reputation.securityProfile === 'Strict') {
+                    console.log(`   ⚠️  WARNING: Low reputation image!`);
+                    console.log(`   Stake required: 2x normal (${reputation.stakeMultiplier}x)`);
+                    console.log(`   This image has ${reputation.violations} violation(s)`);
+                } else if (reputation.securityProfile === 'Standard') {
+                    console.log(`   ℹ️  Standard security - Normal stake required`);
+                } else {
+                    console.log(`   ✅ Trusted image - Enhanced performance allowed`);
+                }
+                console.log();
+            } catch (error) {
+                console.log(`   ⚠️  Could not check reputation: ${error.message}`);
+            }
+        }
 
         const signer = this.keyring.addFromUri(account);
 
@@ -255,7 +278,9 @@ class ComputeChain {
         } = options;
 
         if (!image) throw new Error('Image required');
-        if (!inputs || inputs.length === 0) throw new Error('Inputs required (use submitJob for jobs without inputs)');
+        if (inputs.length === 0 && secrets.length === 0) {
+            throw new Error('Either inputs or secrets required (use submitJob for jobs without inputs/secrets)');
+        }
         if (inputs.length > 10) throw new Error('Maximum 10 input files');
         if (secrets.length > 10) throw new Error('Maximum 10 secrets');
 
@@ -675,6 +700,118 @@ class ComputeChain {
         }
 
         return challenges;
+    }
+
+    /**
+     * Get image reputation and security score
+     * @param {string} imageCid - Docker image CID or name
+     * @returns {Promise<Object>} Reputation data
+     */
+    async getImageReputation(imageCid) {
+        await this.connect();
+
+        const reputation = await this.api.query.ipfsHost.imageReputations(imageCid);
+
+        if (reputation.isNone) {
+            return {
+                imageCid,
+                score: 50, // Default for unknown images
+                totalRuns: 0,
+                cleanRuns: 0,
+                violations: 0,
+                securityProfile: 'Standard',
+                message: 'Image has no reputation history (will start with Standard profile)'
+            };
+        }
+
+        const rep = reputation.unwrap();
+        const score = rep.score.toNumber();
+
+        // Determine security profile based on score
+        let securityProfile = 'Standard';
+        if (score >= 80) securityProfile = 'Relaxed';
+        else if (score < 30) securityProfile = 'Strict';
+
+        return {
+            imageCid,
+            score,
+            totalRuns: rep.totalRuns.toNumber(),
+            cleanRuns: rep.cleanRuns.toNumber(),
+            violations: rep.violations.toNumber(),
+            lastUpdated: rep.lastUpdated.toNumber(),
+            securityProfile,
+            stakeMultiplier: securityProfile === 'Strict' ? 2 : 1
+        };
+    }
+
+    /**
+     * Report security violation for a job
+     * @param {number} jobId - Job ID where violation occurred
+     * @param {number|string} violationType - Violation type (0=Syscall, 1=Network, 2=FileAccess, 3=Resource)
+     * @param {string} details - Detailed description of violation
+     * @param {number} severity - Severity level (0-10, 10 is most severe)
+     * @param {string} account - Reporter account (default: //Alice)
+     * @returns {Promise<void>}
+     */
+    async reportSecurityViolation(jobId, violationType, details, severity, account = '//Alice') {
+        await this.connect();
+
+        const signer = this.keyring.addFromUri(account);
+
+        // Convert string type to number if needed
+        const violationTypeMap = {
+            'SyscallViolation': 0,
+            'NetworkViolation': 1,
+            'FileAccessViolation': 2,
+            'ResourceViolation': 3
+        };
+
+        const typeNum = typeof violationType === 'string'
+            ? violationTypeMap[violationType]
+            : violationType;
+
+        if (typeNum === undefined || typeNum < 0 || typeNum > 3) {
+            throw new Error('Invalid violation type. Use 0-3 or SyscallViolation/NetworkViolation/FileAccessViolation/ResourceViolation');
+        }
+
+        if (severity < 0 || severity > 10) {
+            throw new Error('Severity must be between 0 and 10');
+        }
+
+        console.log(`🚨 Reporting security violation for job ${jobId}...`);
+        console.log(`   Type: ${typeNum} (${Object.keys(violationTypeMap)[typeNum]})`);
+        console.log(`   Severity: ${severity}/10`);
+        console.log(`   Details: ${details.substring(0, 50)}${details.length > 50 ? '...' : ''}`);
+
+        return new Promise((resolve, reject) => {
+            this.api.tx.ipfsHost.reportSecurityViolation(
+                jobId,
+                typeNum,
+                details,
+                severity
+            ).signAndSend(signer, ({ status, events, dispatchError }) => {
+                if (dispatchError) {
+                    if (dispatchError.isModule) {
+                        const decoded = this.api.registry.findMetaError(dispatchError.asModule);
+                        reject(new Error(`${decoded.name}: ${decoded.docs.join(' ')}`));
+                    } else {
+                        reject(new Error(dispatchError.toString()));
+                    }
+                    return;
+                }
+
+                if (status.isInBlock) {
+                    events.forEach(({ event }) => {
+                        if (event.section === 'ipfsHost' && event.method === 'SecurityViolationReported') {
+                            console.log(`✅ Security violation reported successfully`);
+                            console.log(`   Image reputation will be degraded`);
+                            console.log(`   Submitter will be slashed proportional to severity`);
+                        }
+                    });
+                    resolve();
+                }
+            }).catch(reject);
+        });
     }
 
     /**
