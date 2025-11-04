@@ -203,7 +203,8 @@ class ComputeChain {
         if (typeof file === 'string') {
             form.append('file', fs.createReadStream(file));
         } else if (Buffer.isBuffer(file)) {
-            form.append('file', file);
+            // Buffer needs filename for multipart form-data
+            form.append('file', file, { filename: 'upload.dat' });
         } else {
             throw new Error('File must be path string or Buffer');
         }
